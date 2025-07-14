@@ -92,3 +92,148 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+
+import pandas as pd
+import pickle
+import gzip
+import json
+import os
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import precision_score, recall_score, f1_score, balanced_accuracy_score, confusion_matrix
+from glob import glob
+
+
+def load_data(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, compression = 'zip')
+    return df
+
+def clean_data(DataFrame: pd.DataFrame) -> pd.DataFrame:
+    DataFrame.drop(columns = 'ID', inplace = True)
+    DataFrame.rename(columns = {'default payment next month': 'default'},
+                     inplace = True)
+    DataFrame['EDUCATION'] = DataFrame['EDUCATION'].apply(lambda x: 4 if x >= 4 else x).astype('category')
+    DataFrame = DataFrame.query('EDUCATION != 0 and MARRIAGE != 0')
+    return DataFrame
+
+def features_target_split(DataFrame: pd.DataFrame) -> tuple:
+    return DataFrame.drop(columns = 'default'), DataFrame['default']
+
+def make_pipeline(estimator: RandomForestClassifier, cat_features: list, num_features: list) -> Pipeline:
+    preprocessor = ColumnTransformer(
+        transformers = [
+            ('cat', OneHotEncoder(handle_unknown = 'ignore'), cat_features),
+            ('num', 'passthrough', num_features)
+        ]
+    )
+
+    pipeline = Pipeline(
+        steps = [
+            ('preprocessor', preprocessor),
+            ('classifier', estimator)
+        ],
+        verbose = False
+    )
+
+    return pipeline
+
+def make_grid_search(estimator: Pipeline, param_grid: dict, cv = 10) -> GridSearchCV:
+    grid_search = GridSearchCV(
+        estimator = estimator,
+        param_grid = param_grid,
+        cv = cv,
+        scoring = 'balanced_accuracy',
+        n_jobs = -1
+    )
+    return grid_search
+
+def save_estimator(path: str, estimator: Pipeline) -> None:
+    with gzip.open(path, 'wb') as file:
+        pickle.dump(estimator, file)
+
+def eval_model(estimator: Pipeline, features: pd.DataFrame, target: pd.Series, name: str) -> dict:
+    y_pred = estimator.predict(features)
+    metrics = {
+        'type': 'metrics',
+        'dataset': name,
+        'precision': precision_score(target, y_pred),
+        'balanced_accuracy': balanced_accuracy_score(target, y_pred),
+        'recall': recall_score(target, y_pred),
+        'f1_score': f1_score(target, y_pred)
+    }
+    return metrics
+    
+def save_metrics(path: str, train_metrics: dict, test_metrics: dict) -> None:
+    with open(path, 'w') as file:
+        file.write(json.dumps(train_metrics) + '\n')
+        file.write(json.dumps(test_metrics) + '\n')
+
+def confusion_mtrx(estimator: Pipeline, features: pd.DataFrame, target: pd.Series, name: str) -> dict:
+    y_pred = estimator.predict(features)
+    cm = confusion_matrix(target, y_pred)
+    mtrx = {
+        'type': 'cm_matrix',
+        'dataset': name,
+        'true_0': {'predicted_0': int(cm[0, 0]),
+                   'predicted_1': int(cm[0, 1])},
+        'true_1': {'predicted_0': int(cm[1, 0]),
+                   'predicted_1': int(cm[1, 1])}
+    }
+    return mtrx
+
+def save_cm(path: str, train_mtrx: dict, test_mtrx: dict) -> None:
+    with open(path, 'a') as file:
+        file.write(json.dumps(train_mtrx) + '\n')
+        file.write(json.dumps(test_mtrx))
+
+def create_out_dir(out_dir: str) -> None:
+        if os.path.exists(out_dir):
+            for file in glob(f'{out_dir}/*'):
+                os.remove(file)
+            os.rmdir(out_dir)
+        os.makedirs(out_dir)
+
+def run():
+
+    train = clean_data(load_data("files/input/train_data.csv.zip"))
+    test = clean_data(load_data("files/input/test_data.csv.zip"))
+
+    x_train, y_train = features_target_split(train)
+    x_test, y_test = features_target_split(test)
+
+    cat_features = [col for col in x_test.columns if x_test[col].dtype == 'category']
+    num_features = [col for col in x_test.columns if x_test[col].dtype != 'category']
+
+    pipeline = make_pipeline(RandomForestClassifier(), cat_features, num_features)
+    
+    param_grid = {
+    'classifier__n_estimators': [200],
+    'classifier__max_depth': [35],
+    'classifier__class_weight': ['balanced'],
+    'classifier__max_features': ['log2'],
+}
+    estimator = make_grid_search(
+        pipeline,
+        param_grid,
+        10
+    )
+    estimator.fit(x_train, y_train)
+
+    create_out_dir("files/models")
+    create_out_dir("files/output")
+
+    save_estimator("files/models/model.pkl.gz", estimator)
+
+    train_metrics = eval_model(estimator, x_train, y_train, 'train')
+    test_metrics = eval_model(estimator, x_test, y_test, 'test')
+    save_metrics("files/output/metrics.json", train_metrics, test_metrics)
+
+    train_cm = confusion_mtrx(estimator, x_train, y_train, 'train')
+    test_cm = confusion_mtrx(estimator, x_test, y_test, 'test')
+    save_cm("files/output/metrics.json", train_cm, test_cm)    
+
+if __name__ == '__main__':
+    run()
