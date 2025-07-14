@@ -38,14 +38,14 @@ METRICS = [
     {
         "type": "cm_matrix",
         "dataset": "train",
-        "true_0": {"predicted_0": 16060, "predicted_1": None},
-        "true_1": {"predicted_0": None, "predicted_1": 2740},
+        "true_0": {"predicted_0": 1, "predicted_1": None},
+        "true_1": {"predicted_0": None, "predicted_1": 1},
     },
     {
         "type": "cm_matrix",
         "dataset": "test",
-        "true_0": {"predicted_0": 6670, "predicted_1": None},
-        "true_1": {"predicted_0": None, "predicted_1": 760},
+        "true_0": {"predicted_0": 1, "predicted_1": None},
+        "true_1": {"predicted_0": None, "predicted_1": 1},
     },
 ]
 
